@@ -1,0 +1,13 @@
+{
+    "Title": "Build OSTest",
+    "Repository": "git@github.com:jsren/ostest",
+    "CommitReference": "master",
+    "BuildSteps": [{
+        "Name": "build",
+        "Command": "bash -c \"make example\""
+    }],
+    "TestSteps": [{
+        "Command": "bash -c ./example.exe",
+        "ResultParser": "ostest"
+    }]
+}
