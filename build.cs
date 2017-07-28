@@ -157,7 +157,7 @@ namespace cci
             proc.RedirectStandardOutput = true;
             proc.UseShellExecute = false;
 
-            using (var process = Process.Start(proc))
+            using (var process = new Process())
             {
                 var lines = new List<OutputLine>(20);
 
@@ -168,6 +168,8 @@ namespace cci
                 process.OutputDataReceived += (s, e) => {
                     if (e.Data != null) lock (lines) lines.Add(new OutputLine(Stream.Stdout, e.Data));
                 };
+                process.StartInfo = proc;
+                process.Start();
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
 

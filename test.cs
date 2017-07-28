@@ -3,35 +3,43 @@ using System;
 
 namespace cci
 {
+    public class TestResults
+    {
+        public int TestsRun { get; private set; }
+        public int TestsSucceeded { get; private set; }
+        public int TestsFailed { get; private set; }
+        public bool Succeeded { get; private set; }
+
+        public TestResults(int run, int succeeded, int failed)
+        {
+            TestsRun = run;
+            TestsSucceeded = succeeded;
+            TestsFailed = failed;
+            Succeeded = TestsFailed == 0;
+        }
+    }
+
     public interface ITestResultParser
     {
-        int TestsRun { get; }
-        int TestsSucceeded { get; }
-        int TestsFailed { get; }
-
-        void ParseOutput(StepResult<TestStep> result);
+        TestResults ParseOutput(StepResult<TestStep> result);
     }
 
 
     public class OSTestParser : ITestResultParser
     {
-        public int TestsRun { get; private set; }
-
-        public int TestsSucceeded { get; private set; }
-
-        public int TestsFailed { get; private set; }
-
-        public void ParseOutput(StepResult<TestStep> result)
+        public TestResults ParseOutput(StepResult<TestStep> result)
         {
+            int run = 0, succeeded = 0, failed = 0;
             foreach (var line in result.Lines)
             {
                 if (line.Line.StartsWith("[PASS]")) {
-                    TestsRun++; TestsSucceeded++;
+                    run++; succeeded++;
                 }
                 else if (line.Line.StartsWith("[FAIL]")) {
-                    TestsRun++; TestsFailed++;
+                    run++; failed++;
                 }
             }
+            return new TestResults(run, succeeded, failed);
         }
     }
 }

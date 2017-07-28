@@ -44,8 +44,10 @@ namespace cci
             }
         }
 
-        public void saveResults(TaskDefinition task, TaskResults results, ITestResultParser tests)
+        public void saveResults(TaskDefinition task, TaskResults results, TestResults tests)
         {
+            var outdir = System.IO.Path.Combine(Path, task.Title);
+
             // Retry with timeout if another CCI thread is accessing repo
             int retry = 0;
             for (; retry < 3; retry++)
@@ -55,15 +57,19 @@ namespace cci
                     using (var _ = File.Create(".cci.lock", 64, FileOptions.DeleteOnClose))
                     {
                         // Checkout branch
-                        var cmd = new SetupStep($"git checkout -B {Branch}");
-                        var res = new CommandRunner().runCommand(cmd, 1000 * 10, Path);
+                        //var cmd = new SetupStep($"git checkout -B {Branch}");
+                        //var res = new CommandRunner().runCommand(cmd, 1000 * 10, Path);
 
-                        if (res.ExitCode != 0) {
-                            throw new Exception($"Unable to save results: git checkout returned {res.ExitCode}");
-                        }
+                        // if (res.ExitCode != 0) {
+                        //     Console.WriteLine("Cannot save results");
+                        //     throw new Exception($"Unable to save results: git checkout returned {res.ExitCode}");
+                        // }
 
-                        // Now update file & push
-                        using (var file = new StreamWriter(File.Create(System.IO.Path.Combine(Path, task.Title + ".hs"))))
+                        // Create directory as needed
+                        Directory.CreateDirectory(outdir);
+
+                        // Write build log
+                        using (var file = new StreamWriter(File.Create(System.IO.Path.Combine(outdir,"log.hs"))))
                         {
                             file.WriteLine($"--Beginning setup stage of {task.Title}@{task.CommitReference}\n--");
                             printResults(file, results.SetupResults);
@@ -91,14 +97,32 @@ namespace cci
                             else file.WriteLine("\n\nFAILED at setup stage.");
                         }
 
-                        cmd = new SetupStep("git add --all");
-                        res = new CommandRunner().runCommand(cmd, 1000 * 10, Path);
+                        // Create SVG badges
+                        using (var file = new StreamWriter(File.Create(
+                            System.IO.Path.Combine(outdir, "build-status.svg"))))
+                        {
+                            if (results.BuildResults.Success) {
+                                file.Write(getStatusSVG("build", "passing", DefaultPassColor));
+                            }
+                            else file.Write(getStatusSVG("build", "failing", DefaultFailColor));
+                        }
+                        using (var file = new StreamWriter(File.Create(
+                            System.IO.Path.Combine(outdir, "test-status.svg"))))
+                        {
+                            if (tests.Succeeded) {
+                                file.Write(getStatusSVG("tests", "passing", DefaultPassColor));
+                            }
+                            else file.Write(getStatusSVG("tests", "failing", DefaultFailColor));
+                        }
 
-                        cmd = new SetupStep($"git commit -m {Guid.NewGuid()}");
-                        res = new CommandRunner().runCommand(cmd, 1000 * 10, Path);
+                        var cmd = new SetupStep("git add --all");
+                        var res = new CommandRunner().runCommand(cmd, 1000 * 10, outdir);
+
+                        cmd = new SetupStep($"git commit -m \"Results for '{task.Title}'");
+                        res = new CommandRunner().runCommand(cmd, 1000 * 10, outdir);
 
                         cmd = new SetupStep($"git push -u origin {Branch}");
-                        res = new CommandRunner().runCommand(cmd, 1000 * 20, Path);
+                        res = new CommandRunner().runCommand(cmd, 1000 * 20, outdir);
                         break;
                     }
                 }
@@ -110,6 +134,34 @@ namespace cci
             if (retry == 3) {
                 throw new Exception("Unable to save results: cannot create lock file");
             }
+        }
+
+
+        private static string SVGTemplate =
+@"<?xml version='1.0'?>
+<svg xmlns='http://www.w3.org/2000/svg' width='100' height='20'>
+<linearGradient id='a' x2='0' y2='100%'>
+    <stop offset='0' stop-color='#bbb' stop-opacity='.1'/>
+    <stop offset='1' stop-opacity='.1'/>
+</linearGradient>
+<rect rx='3' width='100' height='20' fill='#555'/>
+<rect rx='3' x='45' width='55' height='20' fill='{2}'/>
+<path fill='{2}' d='M45 0h4v20h-4z'/>
+<rect rx='3' width='100' height='20' fill='url(#a)'/>
+<g fill='#fff' text-anchor='middle' font-family='DejaVu Sans,Verdana,Geneva,sans-serif' font-size='11'>
+    <text x='24' y='15' fill='#010101' fill-opacity='.3'>{0}</text>
+    <text x='24' y='14'>{0}</text>
+    <text x='72' y='15' fill='#010101' fill-opacity='.3'>{1}</text>
+    <text x='72' y='14'>{1}</text>
+</g>
+</svg>
+";
+        public static readonly string DefaultPassColor = "#4c1";
+        public static readonly string DefaultFailColor = "#c30";
+
+        public string getStatusSVG(string topic, string statusLabel, string bgColor)
+        {
+            return String.Format(SVGTemplate, topic, statusLabel, bgColor);
         }
     }
 }
