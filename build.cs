@@ -1,130 +1,196 @@
 /* (c) 2017 James Renwick */
-using System.Collections.Generic;
 using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System;
 
 namespace cci
 {
-    public interface ICommand
+    public class SystemCommand
     {
-        string Name { get; }
-        string Command { get; }
-        int Timeout { get; }
-        string WorkingDirectory { get; }
-        Dictionary<string, string> Environment { get; }
-    }
-
-
-    public class SetupStep : ICommand
-    {
+        /// <summary>
+        /// Gets the name of this command, or null if none given.
+        /// </summary>
         [JsonProperty]
         public string Name { get; private set; }
-        [JsonProperty]
+        /// <summary>
+        /// Gets the command to be run.
+        /// </summary>
+        [JsonProperty, JsonRequired]
         public string Command { get; private set; }
+        /// <summary>
+        /// Gets the command timeout in milliseconds.
+        /// </summary>
+        [JsonProperty]
+        public int Timeout { get; private set; }
+        /// <summary>
+        /// Gets the command's working directory, or null if the
+        /// current is to be used.
+        /// </summary>
         [JsonProperty]
         public string WorkingDirectory { get; private set; }
+        /// <summary>
+        /// Gets the additional environment variables under which the command
+        /// will be executed, or null if none specified.
+        /// </summary>
         [JsonProperty]
         public Dictionary<string, string> Environment { get; private set; }
 
-        [JsonProperty]
-        public int Timeout { get; private set; }
+        [JsonConstructor]
+        private SystemCommand()
+        {
 
-        public SetupStep(string command, int timeout=0)
+        }
+
+        public SystemCommand(string command)
         {
             Command = command;
+        }
+
+        public SystemCommand(string command, string workingDirectory) : this(command)
+        {
+            WorkingDirectory = workingDirectory;
+        }
+
+        public SystemCommand(string name, string command, int timeout, 
+            string workingDirectory, Dictionary<string, string> environment)
+        {
+            Name = name;
+            Command = command;
             Timeout = timeout;
+            WorkingDirectory = workingDirectory;
+            Environment = environment;
         }
     }
 
 
-    public class BuildStep : ICommand
+
+    public class ProjectDefinition
     {
-        [JsonProperty]
-        public string Name { get; private set; }
-        [JsonProperty]
-        public string Command { get; private set; }
-        [JsonProperty]
-        public string WorkingDirectory { get; private set; }
-        [JsonProperty]
-        public Dictionary<string, string> Environment { get; private set; }
-
-        [JsonProperty]
-        public int Timeout { get; private set; }
-    }
-
-
-    public class TestStep : ICommand
-    {
-        [JsonProperty]
-        public string Name { get; private set; }
-        [JsonProperty]
-        public string Command { get; private set; }
-        [JsonProperty]
-        public string ResultParser { get; private set; }
-        [JsonProperty]
-        public string WorkingDirectory { get; private set; }
-        [JsonProperty]
-        public Dictionary<string, string> Environment { get; private set; }
-        [JsonProperty]
-        public int Timeout { get; private set; }
-    }
-
-
-    public class TaskDefinition
-    {
-        [JsonProperty]
+        /// <summary>
+        /// Gets the title of the project.
+        /// </summary>
+        [JsonProperty, JsonRequired]
         public string Title { get; private set; }
-        [JsonProperty]
+        /// <summary>
+        /// Gets the git repository URI of the project.
+        /// </summary>
+        [JsonProperty, JsonRequired]
         public string Repository { get; private set; }
+        /// <summary>
+        /// Gets the commit reference (commit hash or branch)
+        /// to be checked out, or null for default.
+        /// </summary>
         [JsonProperty]
         public string CommitReference { get; private set; }
+        /// <summary>
+        /// Gets the list of commands to run to build the project.
+        /// </summary>
         [JsonProperty]
-        public TestStep[] TestSteps { get; private set; }
+        public SystemCommand[] BuildSteps { get; private set; }
+        /// <summary>
+        /// Gets the list of commands to run to test the project.
+        /// </summary>
         [JsonProperty]
-        public BuildStep[] BuildSteps { get; private set; }
+        public SystemCommand[] TestSteps { get; private set; }
+        /// <summary>
+        /// Gets the default timeout for commands run as part of the project's
+        /// build or test procedures.
+        /// </summary>
         [JsonProperty]
-        public int DefaultStepTimeout { get; private set; }
+        public int DefaultCommandTimeout { get; private set; }
 
-        public static TaskDefinition fromJSON(string json)
+        [JsonConstructor]
+        private ProjectDefinition()
         {
-            return JsonConvert.DeserializeObject<TaskDefinition>(json);
+
+        }
+
+        /// <summary>
+        /// Creates a ProjectDefinition from its JSON definition.
+        /// </summary>
+        /// <param name="json">The JSON representation of a ProjectDefinition.</param>
+        /// <returns>The ProjectDefinition represented by the given JSON.</returns>
+        public static ProjectDefinition FromJSON(string json)
+        {
+            return JsonConvert.DeserializeObject<ProjectDefinition>(json);
         }
     }
 
-    public enum Stream
+
+    public enum OutputStream
     {
         Stdout,
         Stderr
     }
 
+
     public struct OutputLine
     {
-        public Stream Source { get; private set; }
-        public string Line { get; private set; }
+        /// <summary>
+        /// Gets the stream source of the line.
+        /// </summary>
+        public OutputStream Source { get; private set; }
+        /// <summary>
+        /// Gets the line's string value.
+        /// </summary>
+        public string Text { get; private set; }
 
-        public OutputLine(Stream source, string line)
+        /// <summary>
+        /// Creates a new OutputLine.
+        /// </summary>
+        /// <param name="source">The source stream.</param>
+        /// <param name="line">The string value.</param>
+        public OutputLine(OutputStream source, string line)
         {
             Source = source;
-            Line = line;
+            Text = line;
         }
     }
 
 
-    public class StepResult<Command> where Command : ICommand
+    public class CommandResult
     {
-        public Command Step { get; private set; }
+        /// <summary>
+        /// Gets the command executed.
+        /// </summary>
+        public SystemCommand Command { get; private set; }
+        /// <summary>
+        /// Gets the output of the command.
+        /// </summary>
         public OutputLine[] Lines { get; private set; }
+        /// <summary>
+        /// Gets the exit code of the command. Zero indicates success.
+        /// </summary>
         public int ExitCode { get; private set; }
+        /// <summary>
+        /// Gets whether the command timed out.
+        /// </summary>
         public bool TimedOut { get; private set; }
+        /// <summary>
+        /// Gets the execution duration of the command.
+        /// </summary>
         public TimeSpan Duration { get; private set; }
+        /// <summary>
+        /// Gets the execution start time of the command.
+        /// </summary>
         public DateTime StartTime { get; private set; }
 
-        public StepResult(Command step, OutputLine[] lines, int exitCode,
+
+        /// <summary>
+        /// Creates a new CommandResult.
+        /// </summary>
+        /// <param name="command">The command exected.</param>
+        /// <param name="lines">The command's output.</param>
+        /// <param name="exitCode">The command's exit code.</param>
+        /// <param name="timedOut">Whether execution of the command timed out.</param>
+        /// <param name="duration">The execution duration of the command.</param>
+        /// <param name="startTime">The start time of the command's execution.</param>
+        public CommandResult(SystemCommand command, OutputLine[] lines, int exitCode,
             bool timedOut, TimeSpan duration, DateTime startTime)
         {
-            Step = step;
+            Command = command;
             Lines = lines;
             ExitCode = exitCode;
             TimedOut = timedOut;
@@ -136,20 +202,20 @@ namespace cci
 
     public class CommandRunner
     {
-        public StepResult<Command> runCommand<Command>(Command step,
-            int timeout = 0, string baseDir = null) where Command : ICommand
+        public CommandResult RunCommand(SystemCommand cmd,
+            int timeout = 0, string baseDir = null)
         {
-            var parts = step.Command.Split(new char[] { ' ' }, 2);
+            var parts = cmd.Command.Split(new char[] { ' ' }, 2);
             var proc = new ProcessStartInfo(parts[0], parts.Length > 1 ? parts[1] : "");
 
             // Get working directory
             string dir = baseDir ?? ".";
-            if (step.WorkingDirectory != null) {
-                dir = System.IO.Path.Combine(dir, step.WorkingDirectory);
+            if (cmd.WorkingDirectory != null) {
+                dir = System.IO.Path.Combine(dir, cmd.WorkingDirectory);
             }
             // Get environment
-            if (step.Environment != null) {
-                proc.Environment.Concat(step.Environment);
+            if (cmd.Environment != null) {
+                proc.Environment.Concat(cmd.Environment);
             }
             proc.WorkingDirectory = dir;
             proc.CreateNoWindow = true;
@@ -163,10 +229,10 @@ namespace cci
 
                 process.EnableRaisingEvents = true;
                 process.ErrorDataReceived += (s, e) => {
-                    if (e.Data != null) lock (lines) lines.Add(new OutputLine(Stream.Stderr, e.Data));
+                    if (e.Data != null) lock (lines) lines.Add(new OutputLine(OutputStream.Stderr, e.Data));
                 };
                 process.OutputDataReceived += (s, e) => {
-                    if (e.Data != null) lock (lines) lines.Add(new OutputLine(Stream.Stdout, e.Data));
+                    if (e.Data != null) lock (lines) lines.Add(new OutputLine(OutputStream.Stdout, e.Data));
                 };
                 process.StartInfo = proc;
                 process.Start();
@@ -174,26 +240,80 @@ namespace cci
                 process.BeginErrorReadLine();
 
                 var exited = process.WaitForExit(timeout != 0 ? timeout : (
-                    step.Timeout != 0 ? step.Timeout : int.MaxValue));
+                    cmd.Timeout != 0 ? cmd.Timeout : int.MaxValue));
                 if (!exited) process.Kill();
 
                 // Return result
                 var duration = DateTime.Now - process.StartTime;
-                return new StepResult<Command>(step, lines.ToArray(),
+                return new CommandResult(cmd, lines.ToArray(),
                     process.ExitCode, !exited, duration, process.StartTime);
             }
         }
     }
 
-    public class TaskResults
-    {
-        public StepResults<SetupStep> SetupResults { get; private set; }
-        public StepResults<BuildStep> BuildResults { get; private set; }
-        public StepResults<TestStep> TestResults { get; private set; }
 
-        public TaskResults(StepResults<SetupStep> setupResults,
-            StepResults<BuildStep> buildResults, StepResults<TestStep> testResults)
+    /// <summary>
+    /// Object representing the execution of one of a project's stages.
+    /// </summary>
+    public class StageResults
+    {
+        /// <summary>
+        /// Gets the name of the stage that was executed.
+        /// </summary>
+        public string Stage { get; private set; }
+        /// <summary>
+        /// Gets the results of the commands which were executed.
+        /// </summary>
+        public CommandResult[] Results { get; private set; }
+        /// <summary>
+        /// Gets whether all commands in the stage executed successfully.
+        /// </summary>
+        public bool Successful { 
+            get { return Results.All((r) => r.ExitCode == 0); }
+        }
+
+        /// <summary>
+        /// Creates a new StageResults object.
+        /// </summary>
+        /// <param name="stage">The name of the stage.</param>
+        /// <param name="results">The results of the stage's execution.</param>
+        public StageResults(string stage, CommandResult[] results)
         {
+            Stage = stage;
+            Results = results;
+        }
+
+        private static CommandResult[] emptyResults = new CommandResult[0];
+        public static StageResults Empty(string stage)
+        {
+            return new StageResults(stage, emptyResults);
+        }
+    }
+
+
+    public class RunResults
+    {
+        /// <summary>
+        /// Gets the project that was run.
+        /// </summary>
+        public ProjectDefinition Project { get; private set; }
+        /// <summary>
+        /// Gets the results of the project's setup stage.
+        /// </summary>
+        public StageResults SetupResults { get; private set; }
+        /// <summary>
+        /// Gets the results of the project's build stage.
+        /// </summary>
+        public StageResults BuildResults { get; private set; }
+        /// <summary>
+        /// Gets the results of the project's test stage.
+        /// </summary>
+        public StageResults TestResults { get; private set; }
+
+        public RunResults(ProjectDefinition project, StageResults setupResults,
+            StageResults buildResults, StageResults testResults)
+        {
+            Project = project;
             SetupResults = setupResults;
             BuildResults = buildResults;
             TestResults = testResults;
@@ -201,86 +321,76 @@ namespace cci
     }
 
 
-    public class StepResults<Step> where Step : ICommand
+    public class ProjectRunner : IDisposable
     {
-        public IEnumerable<StepResult<Step>> Steps { get; private set; }
-        public bool Success { get; private set; }
-
-        public StepResults(IEnumerable<StepResult<Step>> stepResults)
-        {
-            Steps = stepResults;
-            Success = stepResults.Any() && stepResults.Last().ExitCode == 0;
-        }
-    }
-
-    public class TaskRunner : IDisposable
-    {
-        public TaskDefinition Task { get; protected set; }
+        public ProjectDefinition Project { get; protected set; }
         public string WorkspaceDir { get; private set; }
 
-        public TaskRunner(TaskDefinition task)
+        public ProjectRunner(ProjectDefinition project)
         {
-            Task = task;
+            Project = project;
             WorkspaceDir = Guid.NewGuid().ToString();
         }
 
-        public StepResults<SetupStep> runSetup()
+        public StageResults RunSetupStage()
         {
-            var step = new SetupStep(
+            var step = new SystemCommand(
                 "git clone -q --recurse-submodules --depth 1 " +
                     "--single-branch --shallow-submodules " +
-                    $"-o {Task.CommitReference}  -- {Task.Repository} {WorkspaceDir}");
+                    $"-o {Project.CommitReference}  -- {Project.Repository} {WorkspaceDir}");
 
-            var results = new StepResult<SetupStep>[] {
-                new CommandRunner().runCommand(step, Task.DefaultStepTimeout)
+            var results = new CommandResult[] {
+                new CommandRunner().RunCommand(step, Project.DefaultCommandTimeout)
             };
-            return new StepResults<SetupStep>(results);
+            return new StageResults("setup", results);
         }
 
-        public StepResults<BuildStep> runBuild()
+        public StageResults RunBuildStage()
         {
-            var results = new List<StepResult<BuildStep>>();
+            var results = new List<CommandResult>();
 
-            foreach (var step in Task.BuildSteps)
+            foreach (var step in Project.BuildSteps)
             {
-                var result = new CommandRunner().runCommand<BuildStep>(
-                    step, Task.DefaultStepTimeout, WorkspaceDir);
+                var result = new CommandRunner().RunCommand(
+                    step, Project.DefaultCommandTimeout, WorkspaceDir);
                 results.Add(result);
 
                 // Break on first failure
                 if (result.ExitCode != 0) break;
             }
-            return new StepResults<BuildStep>(results);
+            return new StageResults("build", results.ToArray());
         }
 
-        public StepResults<TestStep> runTests()
+        public StageResults RunTestStage()
         {
-            return new StepResults<TestStep>(Task.TestSteps.Select((step) =>
-                new CommandRunner().runCommand<TestStep>(
-                    step, Task.DefaultStepTimeout, WorkspaceDir)));
+            return new StageResults("test",
+                Project.TestSteps.Select((step) =>
+                    new CommandRunner().RunCommand(step, 
+                        Project.DefaultCommandTimeout, WorkspaceDir)).ToArray());
         }
 
-        public TaskResults run()
+        public RunResults RunAll()
         {
-            var setupResults = runSetup();
-            var buildResults = new StepResults<BuildStep>(new StepResult<BuildStep>[0]);
-            var testResults = new StepResults<TestStep>(new StepResult<TestStep>[0]);
-
-            if (setupResults.Success) {
-                buildResults = runBuild();
+            var setupResults = RunSetupStage();
+            var buildResults = StageResults.Empty("build");
+            var testResults = StageResults.Empty("test");
+            
+            if (setupResults.Successful) {
+                buildResults = RunBuildStage();
             }
-            if (buildResults.Success) {
-                testResults = runTests();
+            if (buildResults.Successful) {
+                testResults = RunTestStage();
             }
-            return new TaskResults(setupResults, buildResults, testResults);
+            return new RunResults(this.Project, setupResults, 
+                buildResults, testResults);
         }
 
-        private static void setFileAttributes(System.IO.DirectoryInfo dir,
+        private static void SetFileAttributes(System.IO.DirectoryInfo dir,
             System.IO.FileAttributes attributes)
         {
             foreach (var subDir in dir.GetDirectories())
             {
-                setFileAttributes(subDir, attributes);
+                SetFileAttributes(subDir, attributes);
                 subDir.Attributes = attributes;
             }
             foreach (var file in dir.GetFiles()) {
@@ -295,7 +405,7 @@ namespace cci
             {
                 try {
                     // Clear read-only attributes
-                    setFileAttributes(new System.IO.DirectoryInfo(WorkspaceDir),
+                    SetFileAttributes(new System.IO.DirectoryInfo(WorkspaceDir),
                         System.IO.FileAttributes.Normal);
                     // Delete
                     System.IO.Directory.Delete(WorkspaceDir, true);
@@ -307,10 +417,10 @@ namespace cci
             }
         }
 
-        ~TaskRunner() {
+        ~ProjectRunner() {
            Dispose(false);
         }
-        void IDisposable.Dispose()
+        public virtual void Dispose()
         {
             Dispose(true);
             GC.SuppressFinalize(this);

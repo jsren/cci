@@ -1,10 +1,11 @@
+/* (c) 2017 James Renwick */
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
-using Newtonsoft.Json;
 
 namespace cci
 {
@@ -36,7 +37,7 @@ namespace cci
                     System.Text.ASCIIEncoding.ASCII.GetString(buffer.Array, 0, len));
 
                 request.Sender = this;
-                server.notifyRequest(request);
+                server.NotifyRequest(request);
             }
         }
 
@@ -52,7 +53,7 @@ namespace cci
         [JsonProperty, JsonRequired]
         public string Action { get; private set; }
         [JsonProperty]
-        public long BuildReference { get; private set; }
+        public int BuildReference { get; private set; }
         [JsonProperty]
         public string TaskName { get; private set; }
         [JsonIgnore]
@@ -100,19 +101,20 @@ namespace cci
             this.listener.Listen(connectBacklog);
 
             this.running = true;
-            this.acceptTask = Task.Run((Action)this.acceptIncoming);
+            this.acceptTask = Task.Run((Action)this.AcceptIncoming);
 
             this.requestTasks = new Task[maxConnections];
             for (int i = 0; i < maxConnections; i++) {
-                this.requestTasks[i] = Task.Run((Action)this.requestHandler);
+                this.requestTasks[i] = Task.Run((Action)this.RequestHandler);
             }
         }
 
         public void Stop()
         {
             this.running = false;
-            this.listener.Shutdown(SocketShutdown.Both);
-
+            try { 
+                this.listener.Shutdown(SocketShutdown.Both);
+            } catch { }
             try {
                 Task.WaitAll(this.requestTasks, 3000);
             } catch { }
@@ -121,7 +123,7 @@ namespace cci
             } catch { }
         }
 
-        private void acceptIncoming()
+        private void AcceptIncoming()
         {
             while (running)
             {
@@ -133,7 +135,7 @@ namespace cci
             }
         }
 
-        internal void notifyRequest(Request req)
+        internal void NotifyRequest(Request req)
         {
             lock (queueCV)
             {
@@ -142,7 +144,7 @@ namespace cci
             }
         }
 
-        private void requestHandler()
+        private void RequestHandler()
         {
             while (running)
             {
@@ -157,8 +159,12 @@ namespace cci
 
                     if (request != null && this.RequestReceived != null)
                     {
-                        this.RequestReceived(this,
-                            new RequestReceivedEventArgs(request));
+                        try
+                        {
+                            this.RequestReceived(this,
+                                new RequestReceivedEventArgs(request));
+                        }
+                        catch { }
                     }
                 }
                 else queueCV.WaitOne();

@@ -1,6 +1,8 @@
 /* (c) 2017 James Renwick */
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace cci
 {
@@ -18,8 +20,8 @@ namespace cci
 
             if (!Directory.Exists(repoDir))
             {
-                var step = new SetupStep($"git clone -v {repoRemote} {repoDir}");
-                var res = new CommandRunner().runCommand(step, 1000 * 10);
+                var step = new SystemCommand($"git clone -v {repoRemote} {repoDir}");
+                var res = new CommandRunner().RunCommand(step, 1000 * 10);
 
                 if (res.ExitCode != 0) {
                     throw new Exception("Unable to create result saver: cannot clone repository: "
@@ -28,23 +30,56 @@ namespace cci
             }
         }
 
-        private static void printResults<T>(StreamWriter file, StepResults<T> results)
-            where T : ICommand
+        private static void PrintResults(StreamWriter file, 
+            IEnumerable<StageResults> stageOutputs)
         {
-            foreach (var step in results.Steps)
+            foreach (var stage in stageOutputs)
+            {
+                file.WriteLine($"--Stage \"{stage.Stage}\"");
+                file.WriteLine("---------------------------------------------------------------------------");
+                foreach (var step in stage.Results)
+                {
+                    file.WriteLine($"--{step.Command.Command}\n--");
+                    foreach (var line in step.Lines)
+                    {
+                        if (line.Source == OutputStream.Stdout) file.Write("--");
+                        file.WriteLine(line.Text);
+                    }
+                    if (step.TimedOut) {
+                        file.WriteLine("\n[ERROR] Command timed out\n");
+                    }
+                    else if (step.ExitCode != 0) {
+                        file.WriteLine($"\n[ERROR] Command exited with {step.ExitCode}\n");
+                    }
+                }
+                file.WriteLine();
+            }
+        }
+
+        private static void PrintResults(StreamWriter file, IEnumerable<TestResults> testOutputs)
+        {
+            foreach (var run in testOutputs)
             {
                 file.WriteLine("---------------------------------------------------------------------------");
-                file.WriteLine($"--{step.Step.Command}\n--");
+                file.WriteLine($"Of {run.TestsRun} tests, {run.TestsSucceeded} succeeded, {run.TestsFailed} failed.\n");
 
-                foreach (var line in step.Lines)
+                file.WriteLine("--Test Suites:");
+                foreach (var suite in run.TestSuites)
                 {
-                    if (line.Source == Stream.Stdout) file.Write("--");
-                    file.WriteLine(line.Line);
+                    var status = (!suite.Ran) ? "did not run" : (suite.Succeeded ? "succeeded" : "FAILED");
+                    file.WriteLine($"--Suite '{suite.Name}' {status}");
+                }
+                file.WriteLine("--Tests:");
+                foreach (var test in run.Tests)
+                {
+                    var status = (!test.Ran) ? "did not run" : (test.Succeeded ? "succeeded" : "FAILED");
+                    file.WriteLine($"--Test '{test.Name}' {status}");
+                    if (test.Ran && !test.Succeeded) file.WriteLine(test.Summary);
                 }
             }
         }
 
-        public void saveResults(TaskDefinition task, TaskResults results, TestResults tests)
+        public void SaveResults(ProjectDefinition task, RunResults results, IEnumerable<TestResults> tests)
         {
             var outdir = System.IO.Path.Combine(Path, task.Title);
 
@@ -69,70 +104,51 @@ namespace cci
                         Directory.CreateDirectory(outdir);
 
                         // Write build log
-                        using (var file = new StreamWriter(File.Create(System.IO.Path.Combine(outdir,"log.hs"))))
+                        using (var file = new StreamWriter(File.Create(System.IO.Path.Combine(outdir, "log.hs"))))
                         {
-                            file.WriteLine($"--Beginning setup stage of {task.Title}@{task.CommitReference}\n--");
-                            printResults(file, results.SetupResults);
-
-                            if (results.SetupResults.Success)
-                            {
-                                file.WriteLine($"--Beginning build stage of {task.Title}@{task.CommitReference}\n--");
-                                printResults(file, results.BuildResults);
-
-                                if (results.BuildResults.Success)
-                                {
-                                    file.WriteLine($"--Beginning test stage of {task.Title}@{task.CommitReference}\n--");
-                                    printResults(file, results.TestResults);
-
-                                    if (!results.TestResults.Success) {
-                                        file.WriteLine("\n\nFAILED at test stage.");
-                                    }
-
-                                    file.WriteLine($"\n\ntests_run = {tests.TestsRun}");
-                                    file.WriteLine($"tests_passed = {tests.TestsSucceeded}");
-                                    file.WriteLine($"tests_failed = {tests.TestsFailed}");
-                                }
-                                else file.WriteLine("\n\nFAILED at build stage.");
-                            }
-                            else file.WriteLine("\n\nFAILED at setup stage.");
+                            PrintResults(file, new[] { results.SetupResults, results.BuildResults, results.TestResults });
+                        }
+                        // Write test result log
+                        using (var file = new StreamWriter(File.Create(System.IO.Path.Combine(outdir, "tests.hs"))))
+                        {
+                            PrintResults(file, tests);
                         }
 
                         // Create SVG badges
                         using (var file = new StreamWriter(File.Create(
                             System.IO.Path.Combine(outdir, "build-status.svg"))))
                         {
-                            if (results.BuildResults.Success) {
-                                file.Write(getStatusSVG("build", "passing", DefaultPassColor));
+                            if (results.BuildResults.Successful) {
+                                file.Write(GetStatusSVG("build", "passing", DefaultPassColor));
                             }
-                            else file.Write(getStatusSVG("build", "failing", DefaultFailColor));
+                            else file.Write(GetStatusSVG("build", "failing", DefaultFailColor));
                         }
                         using (var file = new StreamWriter(File.Create(
                             System.IO.Path.Combine(outdir, "test-status.svg"))))
                         {
-                            if (tests.Succeeded) {
-                                file.Write(getStatusSVG("tests", "passing", DefaultPassColor));
+                            
+                            if (tests.All((t) => t.TestsFailed == 0)) {
+                                file.Write(GetStatusSVG("tests", "passing", DefaultPassColor));
                             }
-                            else file.Write(getStatusSVG("tests", "failing", DefaultFailColor));
+                            else file.Write(GetStatusSVG("tests", "failing", DefaultFailColor));
                         }
 
-                        var cmd = new SetupStep("git add --all");
-                        var res = new CommandRunner().runCommand(cmd, 1000 * 10, outdir);
+                        // Upload to git repo
+                        var cmd = new SystemCommand("git add --all");
+                        var res = new CommandRunner().RunCommand(cmd, 1000 * 10, outdir);
 
-                        cmd = new SetupStep($"git commit -m \"Results for '{task.Title}'");
-                        res = new CommandRunner().runCommand(cmd, 1000 * 10, outdir);
+                        cmd = new SystemCommand($"git commit -m \"Results for '{task.Title}'");
+                        res = new CommandRunner().RunCommand(cmd, 1000 * 10, outdir);
 
-                        cmd = new SetupStep($"git push -u origin {Branch}");
-                        res = new CommandRunner().runCommand(cmd, 1000 * 20, outdir);
+                        cmd = new SystemCommand($"git push -u origin {Branch}");
+                        res = new CommandRunner().RunCommand(cmd, 1000 * 20, outdir);
                         break;
                     }
                 }
                 catch (Exception e) {
-
+                    Console.WriteLine("[ERROR] Exception when writing results: {0}", e.ToString());
                 }
                 System.Threading.Thread.Sleep(3000);
-            }
-            if (retry == 3) {
-                throw new Exception("Unable to save results: cannot create lock file");
             }
         }
 
@@ -159,7 +175,7 @@ namespace cci
         public static readonly string DefaultPassColor = "#4c1";
         public static readonly string DefaultFailColor = "#c30";
 
-        public string getStatusSVG(string topic, string statusLabel, string bgColor)
+        public string GetStatusSVG(string topic, string statusLabel, string bgColor)
         {
             return String.Format(SVGTemplate, topic, statusLabel, bgColor);
         }

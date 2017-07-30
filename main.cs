@@ -9,11 +9,11 @@ namespace cci
 {
     class Program
     {
-        static Dictionary<string, TaskDefinition> tasks
-             = new Dictionary<string, TaskDefinition>();
+        static Dictionary<string, ProjectDefinition> projects
+             = new Dictionary<string, ProjectDefinition>();
 
-        static Dictionary<long, Tuple<TaskDefinition, TaskResults>> results
-            = new Dictionary<long, Tuple<TaskDefinition, TaskResults>>();
+        static List<Tuple<ProjectDefinition, RunResults>> results
+            = new List<Tuple<ProjectDefinition, RunResults>>();
 
         class RunStatus
         {
@@ -35,33 +35,66 @@ namespace cci
             }
         }
 
-        static long runID = 0;
-
-        static void handleRequest(object sender, RequestReceivedEventArgs e)
+        static void HandleRequest(object sender, RequestReceivedEventArgs e)
         {
             if (e.Request.Action == "run")
             {
-                var task = tasks[e.Request.TaskName];
-                var runner = new TaskRunner(task);
+                var project = projects[e.Request.TaskName];
+                var runner = new ProjectRunner(project);
+                int runID;
 
-                long id = Interlocked.Increment(ref runID);
-                e.RespondWith(new RunResponse(id));
+                // Set initial null results & send response
+                lock (Program.results) {
+                    runID = Program.results.Count;
+                    Program.results.Add(new Tuple<ProjectDefinition, RunResults>(project, null));
+                }
+                e.RespondWith(new RunResponse(runID));
 
-                Program.results.Add(id, new Tuple<TaskDefinition, TaskResults>(task, null));
+                // Perform run
+                Console.WriteLine("[INFO ] Starting Run {0}", runID);
+                RunResults res = runner.RunAll();
+                Console.WriteLine("[INFO ] Completed Run {0}", runID);
 
-                var res = runner.run();
-                var testParser = new OSTestParser();
-                var testResults = testParser.ParseOutput(res.TestResults.Steps.First());
+                try { runner.Dispose(); }
+                catch { }
 
-                new GitResultSaver("results", "git@github.com:jsren/test-results", "master")
-                    .saveResults(task, res, testResults);
-                Program.results[id] = new Tuple<TaskDefinition, TaskResults>(task, res);
+                // Parse test results
+                var testResults = new List<TestResults>(res.TestResults.Results.Length);
+                for (int i = 0; i < res.TestResults.Results.Length; i++)
+                {
+                    var cmdResult = res.TestResults.Results[i];
+                    Console.WriteLine("[INFO ] Writing results for run {0}, test command {1}",
+                        runID, cmdResult.Command.Name ?? i.ToString());
+
+                    try {
+                        testResults.Add(new OSTestParser().ParseOutput(res.TestResults.Results[i]));
+                    }
+                    catch (Exception x) {
+                        Console.WriteLine("[ERROR] Exception when generating results for "
+                            + "run {0} test command {1}: {2}", runID, cmdResult.Command.Name ?? 
+                                i.ToString(), x.ToString());
+                    }
+                }
+
+                // Upload results
+                try {
+                    new GitResultSaver("results", "git@github.com:jsren/test-results", "master")
+                        .SaveResults(project, res, testResults);
+                }
+                catch (Exception x) {
+                    Console.WriteLine("[ERROR] Exception uploading results for run {0}: {1}", runID, x);
+                }
+
+                // Update results
+                Program.results[runID] = new Tuple<ProjectDefinition, RunResults>(project, res);
+                Console.WriteLine("[INFO ] Run {0} completed.", runID);
             }
             else if (e.Request.Action == "status")
             {
                 var buildEntry = Program.results[e.Request.BuildReference];
                 var taskName = buildEntry.Item1.Title;
-                var url = Uri.EscapeUriString($"https://github.com/jsren/test-results/blob/master/{taskName}/log.hs");
+                var url = Uri.EscapeUriString($"https://github.com/jsren/test-results/blob/master/{taskName}");
+
                 e.RespondWith(new RunStatus() {
                     Completed = buildEntry.Item2 != null,
                     RepoLink = url
@@ -71,21 +104,26 @@ namespace cci
 
         static void Main(string[] args)
         {
-            var task = TaskDefinition.fromJSON(
+            var project = ProjectDefinition.FromJSON(
                 System.IO.File.ReadAllText("build.json"));
 
-            tasks.Add(task.Title, task);
+            projects.Add(project.Title, project);
 
             IPEndPoint localEndPoint = new IPEndPoint(IPAddress.Any, 5273);
 
             var server = new BuildServer();
-            server.RequestReceived += handleRequest;
+            server.RequestReceived += HandleRequest;
             server.Start(localEndPoint, 5, 0);
+            Console.WriteLine("[INFO ] Server running.");
 
-            Console.CancelKeyPress += (s, e) => {
+            Console.CancelKeyPress += (s, e) =>
+            {
+                Console.WriteLine("[INFO ] Stopping server...");
                 server.Stop();
+                Console.WriteLine("[INFO ] Server stopped.");
+                Environment.Exit(0);
             };
-            while (true) { System.Threading.Thread.Sleep(10000); }
+            while (true) { Thread.Sleep(10000); }
         }
     }
 }
