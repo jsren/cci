@@ -3,6 +3,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 
 namespace cci
@@ -202,51 +203,65 @@ namespace cci
 
     public class CommandRunner
     {
+
+        private async void ConsumeStream(OutputStream stream, StreamReader reader, List<OutputLine> lines)
+        {
+            string line;
+            while ((line = await reader.ReadLineAsync()) != null)
+            {
+                lock (lines) { lines.Add(new OutputLine(stream, line)); }
+            }
+        }
+
         public CommandResult RunCommand(SystemCommand cmd,
             int timeout = 0, string baseDir = null)
         {
-            var parts = cmd.Command.Split(new char[] { ' ' }, 2);
-            var proc = new ProcessStartInfo(parts[0], parts.Length > 1 ? parts[1] : "");
+            try {
+                var parts = cmd.Command.Split(new char[] { ' ' }, 2);
+                var proc = new ProcessStartInfo(parts[0], parts.Length > 1 ? parts[1] : "");
 
-            // Get working directory
-            string dir = baseDir ?? ".";
-            if (cmd.WorkingDirectory != null) {
-                dir = System.IO.Path.Combine(dir, cmd.WorkingDirectory);
+                // Get working directory
+                string dir = baseDir ?? ".";
+                if (cmd.WorkingDirectory != null) {
+                    dir = System.IO.Path.Combine(dir, cmd.WorkingDirectory);
+                }
+                // Get environment
+                if (cmd.Environment != null) {
+                    proc.Environment.Concat(cmd.Environment);
+                }
+                proc.WorkingDirectory = dir;
+                proc.CreateNoWindow = true;
+                proc.RedirectStandardError = true;
+                proc.RedirectStandardOutput = true;
+                proc.UseShellExecute = false;
+
+                using (var process = new Process())
+                {
+                    var lines = new List<OutputLine>(20);
+
+                    process.StartInfo = proc;
+                    DateTime startTime = DateTime.UtcNow;
+                    process.Start();
+
+                    ConsumeStream(OutputStream.Stderr, process.StandardError, lines);
+                    ConsumeStream(OutputStream.Stdout, process.StandardOutput, lines);
+
+                    var exited = process.WaitForExit(timeout != 0 ? timeout : (
+                        cmd.Timeout != 0 ? cmd.Timeout : int.MaxValue));
+
+                    if (!exited) try {
+                        process.Kill();
+                    } catch { }
+
+                    // Return result
+                    TimeSpan duration = DateTime.UtcNow - startTime;
+                    return new CommandResult(cmd, lines.ToArray(),
+                        process.ExitCode, !exited, duration, startTime);
+                }
             }
-            // Get environment
-            if (cmd.Environment != null) {
-                proc.Environment.Concat(cmd.Environment);
-            }
-            proc.WorkingDirectory = dir;
-            proc.CreateNoWindow = true;
-            proc.RedirectStandardError = true;
-            proc.RedirectStandardOutput = true;
-            proc.UseShellExecute = false;
-
-            using (var process = new Process())
-            {
-                var lines = new List<OutputLine>(20);
-
-                process.EnableRaisingEvents = true;
-                process.ErrorDataReceived += (s, e) => {
-                    if (e.Data != null) lock (lines) lines.Add(new OutputLine(OutputStream.Stderr, e.Data));
-                };
-                process.OutputDataReceived += (s, e) => {
-                    if (e.Data != null) lock (lines) lines.Add(new OutputLine(OutputStream.Stdout, e.Data));
-                };
-                process.StartInfo = proc;
-                process.Start();
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-
-                var exited = process.WaitForExit(timeout != 0 ? timeout : (
-                    cmd.Timeout != 0 ? cmd.Timeout : int.MaxValue));
-                if (!exited) process.Kill();
-
-                // Return result
-                var duration = DateTime.Now - process.StartTime;
-                return new CommandResult(cmd, lines.ToArray(),
-                    process.ExitCode, !exited, duration, process.StartTime);
+            catch (Exception e) {
+                Console.WriteLine($"[ERROR] Exception running \"{cmd.Command}: {e}\"");
+                return new CommandResult(cmd, new OutputLine[0], -1, false, TimeSpan.FromSeconds(0), DateTime.UtcNow);
             }
         }
     }
@@ -336,11 +351,11 @@ namespace cci
         {
             var step = new SystemCommand(
                 "git clone -q --recurse-submodules --depth 1 " +
-                    "--single-branch --shallow-submodules " +
+                    "--single-branch " +
                     $"-o {Project.CommitReference}  -- {Project.Repository} {WorkspaceDir}");
 
-            var results = new CommandResult[] {
-                new CommandRunner().RunCommand(step, Project.DefaultCommandTimeout)
+            var results = new[] {
+                new CommandRunner().RunCommand(step, 1000 * 10)
             };
             return new StageResults("setup", results);
         }
@@ -371,14 +386,17 @@ namespace cci
 
         public RunResults RunAll()
         {
+            Console.WriteLine("[INFO ] Running setup stage...");
             var setupResults = RunSetupStage();
             var buildResults = StageResults.Empty("build");
             var testResults = StageResults.Empty("test");
             
             if (setupResults.Successful) {
+                Console.WriteLine("[INFO ] Running build stage...");
                 buildResults = RunBuildStage();
             }
             if (buildResults.Successful) {
+                Console.WriteLine("[INFO ] Running test stage...");
                 testResults = RunTestStage();
             }
             return new RunResults(this.Project, setupResults, 

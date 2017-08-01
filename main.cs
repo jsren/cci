@@ -106,24 +106,23 @@ namespace cci
         {
             var project = ProjectDefinition.FromJSON(
                 System.IO.File.ReadAllText("build.json"));
-
             projects.Add(project.Title, project);
-
-            IPEndPoint localEndPoint = new IPEndPoint(IPAddress.Any, 5273);
 
             var server = new BuildServer();
             server.RequestReceived += HandleRequest;
-            server.Start(localEndPoint, 5, 0);
+            server.Start(new IPEndPoint(IPAddress.Any, 5274), 5, 0);
             Console.WriteLine("[INFO ] Server running.");
 
+            bool alive = true;
             Console.CancelKeyPress += (s, e) =>
             {
                 Console.WriteLine("[INFO ] Stopping server...");
                 server.Stop();
                 Console.WriteLine("[INFO ] Server stopped.");
+                alive = false;
                 Environment.Exit(0);
             };
-            while (true) { Thread.Sleep(10000); }
+            while (alive) { Thread.Sleep(1000); }
         }
     }
 }

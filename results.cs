@@ -92,13 +92,12 @@ namespace cci
                     using (var _ = File.Create(".cci.lock", 64, FileOptions.DeleteOnClose))
                     {
                         // Checkout branch
-                        //var cmd = new SetupStep($"git checkout -B {Branch}");
-                        //var res = new CommandRunner().runCommand(cmd, 1000 * 10, Path);
+                        var cmd = new SystemCommand($"git checkout -B {Branch}");
+                        var res = new CommandRunner().RunCommand(cmd, 1000 * 10, Path);
 
-                        // if (res.ExitCode != 0) {
-                        //     Console.WriteLine("Cannot save results");
-                        //     throw new Exception($"Unable to save results: git checkout returned {res.ExitCode}");
-                        // }
+                        if (res.ExitCode != 0) {
+                            Console.WriteLine($"[ERROR] Unable to save results: git checkout returned {res.ExitCode}");
+                        }
 
                         // Create directory as needed
                         Directory.CreateDirectory(outdir);
@@ -134,8 +133,8 @@ namespace cci
                         }
 
                         // Upload to git repo
-                        var cmd = new SystemCommand("git add --all");
-                        var res = new CommandRunner().RunCommand(cmd, 1000 * 10, outdir);
+                        cmd = new SystemCommand("git add --all");
+                        res = new CommandRunner().RunCommand(cmd, 1000 * 10, outdir);
 
                         cmd = new SystemCommand($"git commit -m \"Results for '{task.Title}'");
                         res = new CommandRunner().RunCommand(cmd, 1000 * 10, outdir);

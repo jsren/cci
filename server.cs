@@ -20,10 +20,10 @@ namespace cci
         {
             this.server = server;
             this.socket = socket;
-            this.handler = Task.Run((Action)handleConnection);
+            this.handler = Task.Run((Action)HandleConnection);
         }
 
-        private async void handleConnection()
+        private async void HandleConnection()
         {
             var array = new byte[1024];
             ArraySegment<byte> buffer = new ArraySegment<byte>(array);
@@ -112,6 +112,7 @@ namespace cci
         public void Stop()
         {
             this.running = false;
+            this.queueCV.Set();
             try { 
                 this.listener.Shutdown(SocketShutdown.Both);
             } catch { }
